@@ -1,8 +1,20 @@
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
-runner = "probe-rs run --chip RP2040 --protocol swd --speed 16000"
+runner = [
+    "probe-rs",
+    "run",
+    "--chip",
+    "RP2040",
+    "--protocol",
+    "swd",
+    "--speed",
+    "16000",
+    "--log-format",
+    "{{[{L}]%bold} {f}:{l}%35} {s}",
+]
 
 [build]
-target = "thumbv6m-none-eabi"        # Cortex-M0 and Cortex-M0+
+target = "thumbv6m-none-eabi" # Cortex-M0 and Cortex-M0+
 
 [env]
 DEFMT_LOG = "debug"
+DEFMT_FORMAT = "compact"
