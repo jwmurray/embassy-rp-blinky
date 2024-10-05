@@ -2,9 +2,9 @@
 runner = "probe-rs run --chip RP2040 --protocol swd --speed 16000"
 
 [build]
-target = "thumbv6m-none-eabi"        # Cortex-M0 and Cortex-M0+
+target = "thumbv6m-none-eabi" # Cortex-M0 and Cortex-M0+
 
 [env]
 DEFMT_LOG = "debug"
-WIFI_SSID = "wifi-name"              # replace with your own value
-WIFI_PASSWORD = "put-pw-here"        # same
+WIFI_SSID = "QuietEntry"     # replace with your own value
+WIFI_PASSWORD = "AAAAAAAAAA" # same
