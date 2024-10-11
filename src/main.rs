@@ -3,6 +3,7 @@
 
 use core::str::{from_utf8, FromStr};
 use cyw43_pio::PioSpi;
+use defmt::assert_eq;
 use defmt::panic;
 use defmt::*;
 use embassy_executor::Spawner;
@@ -16,8 +17,9 @@ use embassy_rp::gpio::{Level, Output, Pull};
 use embassy_rp::i2c::{Config as I2cConfig, I2c, InterruptHandler as I2cInterruptHandler};
 use embassy_rp::peripherals::{I2C0, PIO0};
 use embassy_rp::pio::{InterruptHandler as PioInterruptHandler, Pio};
-use embassy_time::{Duration, Instant, Timer};
+use embassy_time::{Duration, Instant, Timer, WithTimeout};
 
+use format_no_std;
 use heapless::String;
 
 use rand_core::RngCore;
@@ -101,7 +103,8 @@ async fn main(spawner: Spawner) {
 
     let wifi_ssid = env!("WIFI_SSID");
     let wifi_password = env!("WIFI_PASSWORD");
-    const SERVER_NAME: &str = "pi2b";
+    info!("wifi_ssid: {}, wifi_password: {}", wifi_ssid, wifi_password);
+    const SERVER_NAME: &str = "server";
     const CLIENT_NAME: &str = "picow";
     const COMMS_PORT: u16 = 9932;
 
@@ -138,11 +141,12 @@ async fn main(spawner: Spawner) {
         }
     }
 
+    let network_elapse: u64 = 20_000;
     let start = Instant::now().as_millis();
     loop {
         let elapsed = Instant::now().as_millis() - start;
-        if elapsed > 10000 {
-            core::panic!("Couldn't get network up after 10 seconds");
+        if elapsed > network_elapse {
+            core::panic!("Couldn't get network up after {} seconds", network_elapse);
         } else if stack.is_config_up() {
             info!("Network stack config completed after about {} ms", elapsed);
             break;
@@ -172,18 +176,30 @@ async fn main(spawner: Spawner) {
     let mut msg_buffer = [0; 128];
 
     let mut socket = TcpSocket::new(&stack, &mut rx_buffer, &mut tx_buffer);
-    socket
+    let connect_result = socket
         .connect(IpEndpoint::new(dest, COMMS_PORT))
-        .await
-        .unwrap();
+        .with_timeout(Duration::from_secs(5))
+        .await;
 
-    let tx_size = socket.write("test".as_bytes()).await.unwrap();
-    info!("Wrote {} byes to the server", tx_size);
-    let rx_size = socket.read(&mut msg_buffer).await.unwrap();
-    let response = from_utf8(&msg_buffer[..rx_size]).unwrap();
-    info!("Server replied with {}", response);
+    match connect_result {
+        Ok(Ok(())) => {
+            info!("Connected to the server");
+            // TODO: add code to receive instructions to update the settings as needed.
+            // e.g., the server could specify a new server address, SSID, gateway, passwords, etc.
+            let tx_size = socket.write("test".as_bytes()).await.unwrap();
+            info!("Wrote {} byes to the server", tx_size);
+            let rx_size = socket.read(&mut msg_buffer).await.unwrap();
+            let response = from_utf8(&msg_buffer[..rx_size]).unwrap();
+            info!("Server replied with {}", response);
+        
+            socket.close();
+        }
+        
+        // No need to panic here.  We just continue.  no modificaitons to our settings.
+        Ok(Err(e)) => info!("Failed to connect to the server: {}", e),
+        Err(_) => info!("Connection timed out"),
+    }
 
-    socket.close();
 
     let mut udp_rx_meta = [PacketMetadata::EMPTY; 16];
     let mut udp_rx_buffer = [0; 1024];
@@ -227,19 +243,30 @@ async fn main(spawner: Spawner) {
             [chip_reading, tmp36_reading, mcp9808_reading];
         for r in &readings {
             match r {
-                Ok(t) => info!("Read {} at {} °F", t.sensor, t.temp),
+                Ok(t) => {
+                    let mut buf = [0u8; 128];
+                    let s = format_no_std::show(
+                        &mut buf,
+                        format_args!("Read {} at {} °F", t.sensor, t.temp),
+                    )
+                    .unwrap();
+                    info!("{}", s);
+                    // info!("Read {} at {} °F", t.sensor, t.temp);
+
+                    // format log entry into buffer of bytes for transmission over UDP.
+                    let buf_slice_len = s.len();
+                    let buf_slice = &buf[..buf_slice_len];
+
+                    udp_socket
+                        .send_to(buf_slice, IpEndpoint::new(dest, COMMS_PORT))
+                        .await
+                        .unwrap();
+                }
                 Err(_) => error!("Sensor reading error"),
             }
         }
         format(&mut json, readings.into_iter().filter_map(|r| r.ok()))
             .expect("Couldn't format the readings into a JSON. Maybe the heapless string wasn't big enough?");
-
-        // info!(
-        //     "Temp readings:  MCP9808: {}°F, OnChip: {}°F, TMP36: {}°F",
-        //     mcp9808_reading.unwrap().get_fahrenheit(),
-        //     chip_reading.unwrap().get_fahrenheit(),
-        //     tmp36_reading.unwrap().get_fahrenheit()
-        // );
 
         info!("sending UDP packet");
         udp_socket
